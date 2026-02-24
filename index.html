@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>働いています、とあなたは言う</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="css/style.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.8/dist/cdn.min.js"></script>
+  <script src="js/components.js"></script>
+  <!-- Scenario data (global variables) -->
+  <script src="scenarios/manifest.js"></script>
+  <script src="scenarios/taxi.js"></script>
+  <script src="scenarios/kaigi.js"></script>
+  <script src="scenarios/shoyu.js"></script>
+  <script src="scenarios/kangeikai.js"></script>
+  <script src="scenarios/clearfile.js"></script>
+  <!-- Demo logic -->
+  <script src="app.js"></script>
+</head>
+<body class="view-chat">
+
+<div id="app" x-data="demoApp()">
+
+  <!-- Header -->
+  <header class="header">
+    <div class="header-left">
+      <h1>働いています、とあなたは言う</h1>
+    </div>
+  </header>
+
+  <main class="main-layout layout-chat">
+
+    <!-- Left column: Scenario Selection + Process Tree -->
+    <section class="left-col">
+
+      <!-- Scenario Selection -->
+      <div class="card prompt-card scenario-card"
+           :class="{ 'scenario-card-waiting': !selectedScenario }">
+        <h2>
+          <template x-if="!selectedScenario">
+            <span class="scenario-cta-label">&#9654; まずシナリオを選んでください</span>
+          </template>
+          <template x-if="selectedScenario">
+            <span>Scenario</span>
+          </template>
+        </h2>
+        <div class="scenario-controls">
+          <select class="scenario-select"
+                  :class="{ 'scenario-select-waiting': !_scenarioKey }"
+                  x-model="_scenarioKey">
+            <option value="">&#9660; ここをクリック</option>
+            <template x-for="s in scenarios" :key="s.key">
+              <option :value="s.key" x-text="s.title"></option>
+            </template>
+          </select>
+          <button class="btn btn-primary scenario-play-btn"
+                  @click="playScenario(_scenarioKey)"
+                  :disabled="!_scenarioKey">&#9654; 再生</button>
+        </div>
+        <div class="prompt-display" x-show="prompt">
+          <span class="prompt-display-label">Prompt</span>
+          <span x-text="prompt"></span>
+        </div>
+      </div>
+
+      <!-- Process Tree -->
+      <div class="card tree-card">
+        <h2>Processes</h2>
+        <div class="tree" x-show="parentSessionId">
+          <!-- Parent -->
+          <div class="tree-node tree-node-parent">
+            <span class="node-icon" :class="'status-' + orchestratorStatus">&#9679;</span>
+            <span class="node-label">Orchestrator</span>
+            <span class="badge" :class="'badge-' + orchestratorStatus" x-text="orchestratorStatus"></span>
+            <span class="node-timer" x-show="orchestratorTimer" x-text="orchestratorTimer"></span>
+          </div>
+          <!-- Children -->
+          <template x-for="run in runs" :key="run.run_id">
+            <div class="tree-node tree-node-child" :style="'margin-left:' + (run.depth * 20) + 'px'">
+              <span class="tree-branch">&#9492;&#9472;</span>
+              <span class="node-icon" :class="'status-' + run.status">&#9679;</span>
+              <span class="node-label" x-text="run.label || run.task.substring(0, 40)"></span>
+              <span class="badge" :class="'badge-' + run.status" x-text="run.status"></span>
+              <span class="node-timer" x-show="run.elapsed" x-text="run.elapsed"></span>
+            </div>
+          </template>
+        </div>
+        <div x-show="!parentSessionId" class="empty-state">
+          シナリオを選択してください
+        </div>
+      </div>
+
+    </section>
+
+    <!-- Right column: Chat view -->
+    <section class="right-col right-col-chat">
+
+      <div class="card chat-card">
+        <h2>Chat</h2>
+        <div x-show="chatMessages.length === 0 && !chatTyping" class="empty-state">
+          シナリオを選択するとチャットが表示されます
+        </div>
+        <div class="chat-pane" x-ref="chatPane" x-show="chatMessages.length > 0 || chatTyping">
+          <template x-for="msg in chatMessages" :key="msg.id">
+            <div class="chat-msg" :class="'chat-msg-' + msg.side">
+              <div class="chat-msg-row">
+                <div class="chat-avatar"
+                     :style="'background:' + getPersonaColor(msg.colorIdx)"
+                     x-text="msg.avatar"></div>
+                <div class="chat-msg-body">
+                  <span class="chat-sender"
+                        :style="'color:' + getPersonaColor(msg.colorIdx)"
+                        x-text="msg.senderLabel"></span>
+                  <div class="chat-bubble"
+                       :class="'chat-bubble-' + msg.side"
+                       :style="msg.side === 'left'
+                         ? 'border-left: 3px solid ' + getPersonaColor(msg.colorIdx)
+                         : 'border-right: 3px solid ' + getPersonaColor(msg.colorIdx)"
+                       x-text="isChatExpanded(msg.id) && msg.fullContent ? msg.fullContent : msg.content"></div>
+                  <button class="chat-expand-btn"
+                          x-show="msg.fullContent"
+                          @click="toggleChatExpand(msg.id)"
+                          x-text="isChatExpanded(msg.id) ? '折りたたむ' : '全文表示'"></button>
+                </div>
+              </div>
+            </div>
+          </template>
+          <!-- Typing indicator -->
+          <div class="chat-msg" :class="'chat-msg-' + (chatTypingInfo?.side || 'left')"
+               x-show="chatTyping && chatTypingInfo" x-cloak>
+            <div class="chat-msg-row">
+              <div class="chat-avatar"
+                   :style="'background:' + getPersonaColor(chatTypingInfo?.colorIdx ?? -1)"
+                   x-text="chatTypingInfo?.avatar"></div>
+              <div class="chat-msg-body">
+                <span class="chat-sender"
+                      :style="'color:' + getPersonaColor(chatTypingInfo?.colorIdx ?? -1)"
+                      x-text="chatTypingInfo?.senderLabel"></span>
+                <div class="chat-bubble typing-bubble"
+                     :class="'chat-bubble-' + (chatTypingInfo?.side || 'left')">
+                  <span class="typing-dots">
+                    <span></span><span></span><span></span>
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <!-- Backstage message (independent from chat reveal system) -->
+          <div class="chat-msg chat-msg-left"
+               x-show="backstageStage !== 'hidden'" x-cloak>
+            <div class="chat-msg-row">
+              <div class="chat-avatar"
+                   :style="'background:' + getPersonaColor(-2)">山</div>
+              <div class="chat-msg-body">
+                <span class="chat-sender"
+                      :style="'color:' + getPersonaColor(-2)">山本</span>
+                <div class="chat-bubble typing-bubble chat-bubble-left"
+                     x-show="backstageStage === 'header'"
+                     :style="'border-left: 3px solid ' + getPersonaColor(-2)">
+                  <span class="typing-dots">
+                    <span></span><span></span><span></span>
+                  </span>
+                </div>
+                <div class="chat-bubble chat-bubble-left"
+                     x-show="backstageStage === 'full'"
+                     :style="'border-left: 3px solid ' + getPersonaColor(-2)">山本です。花咲さんの承認はまだです。パソコンに詳しい方は、お役所仕草をするAIを手元で動かすことができます。</div>
+                <a class="chat-github-attach"
+                   x-show="backstageStage === 'full'"
+                   href="https://github.com/sokansi/session-spawn"
+                   target="_blank"
+                   rel="noopener noreferrer">
+                  <svg class="github-icon" viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
+                    <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+                  </svg>
+                  <span>GitHub のリポジトリ</span>
+                </a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </section>
+
+  </main>
+
+</div>
+
+<style>
+  /* Demo-specific styles */
+
+  /* --- Card: waiting state (pulsing border glow) --- */
+  .scenario-card-waiting {
+    border-color: var(--primary) !important;
+    box-shadow: 0 0 12px var(--primary-glow), 0 0 24px rgba(194, 112, 90, 0.08);
+    animation: scenarioCardPulse 2.5s ease-in-out infinite;
+  }
+
+  @keyframes scenarioCardPulse {
+    0%, 100% { box-shadow: 0 0 12px var(--primary-glow), 0 0 24px rgba(194, 112, 90, 0.08); }
+    50%      { box-shadow: 0 0 20px var(--primary-glow), 0 0 40px rgba(194, 112, 90, 0.15); }
+  }
+
+  /* CTA label in h2 */
+  .scenario-cta-label {
+    color: var(--primary);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    animation: ctaTextPulse 2.5s ease-in-out infinite;
+  }
+
+  @keyframes ctaTextPulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.55; }
+  }
+
+  /* --- Controls row --- */
+  .scenario-controls {
+    display: flex;
+    gap: 8px;
+    align-items: stretch;
+    margin-bottom: 12px;
+  }
+
+  .scenario-play-btn {
+    flex-shrink: 0;
+    padding: 8px 16px;
+    font-size: 13px;
+    white-space: nowrap;
+    border-radius: var(--radius);
+  }
+
+  /* --- Select: base --- */
+  .scenario-select {
+    width: 100%;
+    background: var(--bg-input);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius);
+    color: var(--text);
+    padding: 10px 14px;
+    font-size: 14px;
+    font-weight: 500;
+    font-family: var(--font-sans);
+    cursor: pointer;
+    flex: 1;
+    min-width: 0;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  }
+
+  .scenario-select:focus {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px var(--primary-wash);
+  }
+
+  /* --- Select: waiting state (highlighted) --- */
+  .scenario-select-waiting {
+    border-color: var(--primary);
+    background: linear-gradient(135deg, var(--bg-input), rgba(194, 112, 90, 0.06));
+    font-weight: 600;
+    color: var(--text);
+  }
+
+  /* --- Prompt display --- */
+  .prompt-display {
+    font-size: 12px;
+    color: var(--text-secondary);
+    padding: 10px 12px;
+    background: var(--bg-elevated);
+    border-radius: var(--radius);
+    border: 1px solid var(--border-subtle);
+  }
+
+  /* --- GitHub link attachment in chat --- */
+  .chat-github-attach {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 6px;
+    padding: 8px 14px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius);
+    color: var(--primary);
+    text-decoration: none;
+    font-size: 12px;
+    font-weight: 600;
+    transition: all 0.2s ease;
+    align-self: flex-start;
+  }
+
+  .chat-github-attach:hover {
+    background: var(--primary-wash);
+    border-color: var(--primary);
+    box-shadow: 0 2px 8px var(--primary-glow);
+    transform: translateY(-1px);
+  }
+
+  .chat-github-attach .github-icon {
+    flex-shrink: 0;
+  }
+</style>
+
+</body>
+</html>
